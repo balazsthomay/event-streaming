@@ -1,4 +1,5 @@
 from fastapi import FastAPI, WebSocket, Response
+from prometheus_client import Counter, Gauge, generate_latest, CONTENT_TYPE_LATEST
 import redis
 import requests
 import asyncio
@@ -8,6 +9,10 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# Metrics
+active_websocket_connections = Gauge('active_websocket_connections', 'Current number of active WebSocket connections')
+events_sent_to_clients = Counter('events_sent_to_clients', 'Total events sent to WebSocket clients')
+
 app = FastAPI()
 redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
 
@@ -15,21 +20,22 @@ redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
 async def websocket_endpoint(websocket: WebSocket, subscriber_id: str):
     await websocket.accept()
     
-    # Activate stream in Filter Service
-    logger.info(f"Activating stream for subscriber {subscriber_id}")
     try:
-        response = requests.post("http://localhost:8002/activate-stream", json={"subscriber_id": subscriber_id})
-        if response.status_code != 200:
-            logger.error(f"Failed to activate stream for subscriber {subscriber_id}: status_code={response.status_code}")
+        active_websocket_connections.inc()
+        # Activate stream in Filter Service
+        logger.info(f"Activating stream for subscriber {subscriber_id}")
+        try:
+            response = requests.post("http://localhost:8002/activate-stream", json={"subscriber_id": subscriber_id})
+            if response.status_code != 200:
+                logger.error(f"Failed to activate stream for subscriber {subscriber_id}: status_code={response.status_code}")
+                return
+        except Exception as e:
+            logger.error(f"Error activating stream for subscriber {subscriber_id}: {e}")
             return
-    except Exception as e:
-        logger.error(f"Error activating stream for subscriber {subscriber_id}: {e}")
-        return
+        
+        redis_failures = 0
+        max_failures = 3
     
-    redis_failures = 0
-    max_failures = 3
-    
-    try:
         # Read from Redis Stream and push to client
         last_id = '0'
         while True:
@@ -51,6 +57,7 @@ async def websocket_endpoint(websocket: WebSocket, subscriber_id: str):
                         await websocket.send_json(data)
                         last_id = message_id
                         logger.debug(f"Sent event {message_id} to subscriber {subscriber_id}")
+                        events_sent_to_clients.inc()
             await asyncio.sleep(0.1)
     except:
         pass
@@ -58,7 +65,12 @@ async def websocket_endpoint(websocket: WebSocket, subscriber_id: str):
         # Deactivate stream when client disconnects
         requests.delete(f"http://localhost:8002/deactivate-stream/{subscriber_id}")
         logger.info(f"Stream deactivated for subscriber {subscriber_id}")
+        active_websocket_connections.dec()
         
+@app.get("/metrics")
+def metrics():
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)        
+
 @app.get("/health")
 def health_check():
     redis_ok = check_redis()

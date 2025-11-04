@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Response
 from kafka import KafkaConsumer
 from kafka.admin import KafkaAdminClient
+from prometheus_client import Counter, Gauge, Histogram, generate_latest, CONTENT_TYPE_LATEST
 import redis
 import json
 import threading
@@ -10,8 +11,18 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("filter-service")
 
+
+# Metrics
+events_read_from_kafka = Counter('events_read_from_kafka', 'Total events consumed from Kafka topic user-events')
+events_matched_filters = Counter('events_matched_filters', 'Total events that matched at least one filter')
+events_routed_to_redis = Counter('events_routed_to_redis', 'Total events successfully written to Redis Streams')
+redis_write_failures = Counter('redis_write_failures', 'Total failed writes to Redis Streams')
+active_streams_count = Gauge('active_streams_count', 'Current number of active subscriber streams')
+
+
 app = FastAPI()
 redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
 
 active_streams = {}  # {subscriber_id: filter_criteria}
 
@@ -20,7 +31,7 @@ active_streams = {}  # {subscriber_id: filter_criteria}
 def activate_stream(data: dict):
     subscriber_id = data['subscriber_id']
     
-    # Fetch filter criteria from Subscriber Management API
+    # Fetch filter criteria from Subscriber Management API - - ONLY WHEN THE USER CONNECTS, so the events while disconnected are lost
     try:
         response = requests.get(f"http://localhost:8001/filters/{subscriber_id}")
         if response.status_code == 200:
@@ -34,6 +45,7 @@ def activate_stream(data: dict):
 
     # Store in memory
     active_streams[subscriber_id] = criteria
+    active_streams_count.set(len(active_streams))  # Set AFTER modifying dict
     
     return {"status": "activated", "subscriber_id": subscriber_id}
 
@@ -41,6 +53,7 @@ def activate_stream(data: dict):
 def deactivate_stream(subscriber_id: str):
     if subscriber_id in active_streams:
         del active_streams[subscriber_id]
+        active_streams_count.set(len(active_streams))
     return {"status": "deactivated"}
 
 @app.get("/health")
@@ -65,6 +78,10 @@ def health_check():
         status_code=status_code,
         media_type="application/json"
     )
+    
+@app.get("/metrics")
+def metrics():
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 def check_kafka():
@@ -100,16 +117,20 @@ def kafka_consumer_loop():
     
     for message in consumer:
         event = message.value
+        events_read_from_kafka.inc()  # Count every event we read, once
         
         # Check against all active streams
         for subscriber_id, criteria in active_streams.items():
             if matches_criteria(event, criteria):
+                events_matched_filters.inc()  # Count match before we try Redis
                 clean_event = {k: v for k, v in event.items() if v is not None}
                 try:
                     redis_client.xadd(f'events:{subscriber_id}', clean_event)
                     logger.info(f"Routed to {subscriber_id}: eventType={event['eventType']}, eventId={event['eventId']}")
+                    events_routed_to_redis.inc()
                 except Exception as e:
                     logger.error(f"Error routing event to {subscriber_id}: {e}")
+                    redis_write_failures.inc()
                 
 
 def matches_criteria(event, criteria):

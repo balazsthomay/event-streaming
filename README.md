@@ -18,7 +18,7 @@ Start infrastructure:
 ```bash
 docker-compose up -d
 psql -h localhost -U eventstream -d eventstream -f schema.sql
-pip install fastapi uvicorn kafka-python redis psycopg2-binary faker requests
+pip install fastapi uvicorn kafka-python redis psycopg2-binary faker requests locust websocket-client
 ```
 
 Start services in separate terminals:
@@ -35,18 +35,18 @@ curl -X POST http://localhost:8001/filters \
   -H "Content-Type: application/json" \
   -d '{"subscriber_id": "user_1", "event_types": ["purchase"], "user_tiers": ["premium"], "min_amount": 100}'
 
-websocat ws://localhost:8003/ws/user_1
+python client.py
 ```
 
 ## Key Design Decisions
 
 **Kafka + Redis split**: Kafka handles durability and replay. Redis handles fast per-user queues. Each tool does what it's best at.
 
-**Single Filter Service instance**: Works for demo but doesn't scale horizontally. Scaling would need consumer groups and shared state in Redis.
+**Single Filter Service instance**: Doesn't scale horizontally. We would need to move active_streams to Redis (in-memory) so #1 each filter-service instance reads events from their assigned Kafka partition, #2 Check Redis to see if any user cares about this event, #3 Write matching events to Redis Streams
 
 **Lazy stream creation**: Redis streams created only when users connect. Saves memory but users miss events while disconnected.
 
-**No authentication**: Any subscriber_id works. Production needs JWT tokens.
+**No authentication**: Any subscriber_id works.
 
 ## Known Limitations
 
@@ -59,10 +59,36 @@ websocat ws://localhost:8003/ws/user_1
 ## What's Implemented
 
 - Structured logging (INFO/DEBUG/ERROR levels)
-- Health checks on all services
-- Retry logic with exponential backoff
+- Health checks on filter_service and Websocket
+- Retry logic in producer, server
 - Error handling for Redis and API failures
 - Unit tests for filter matching
+
+## Observability
+
+Prometheus metrics at `:8002/metrics` (Filter Service) and `:8003/metrics` (WebSocket Server):
+- Events read/matched/routed, Redis failures, active streams
+- Active connections, events sent to clients
+
+**Metrics endpoints**:
+```bash
+curl http://localhost:8002/metrics | grep -E "(active_streams_count|events_matched)"
+curl http://localhost:8003/metrics | grep -E "(active_websocket|events_sent)"
+```
+
+## Load Testing
+
+Tested with Locust:
+- **10 concurrent connections**: Stable
+- **50 concurrent connections**: 98% failure rate
+- didn't test inbetween
+
+```bash
+python create_test_filters.py
+locust -f locustfile.py --headless --users 10 --spawn-rate 2 --run-time 30s
+```
+
+**Bottleneck**: probably single-threaded uvicorn. Would need multiple workers or load balancer to scale beyond ~10 connections.
 
 ## Tech Stack
 
