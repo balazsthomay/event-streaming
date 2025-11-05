@@ -2,7 +2,7 @@ from kafka import KafkaProducer
 from faker import Faker
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 import random
 import sys
 
@@ -13,7 +13,9 @@ def create_producer_with_retry(max_retries=5):
     for attempt in range(max_retries):
         try:
             return KafkaProducer(
-                bootstrap_servers=['localhost:9092'],
+                # bootstrap_servers=['localhost:9092'], # Use this line when running locally AND in Docker Compose
+                bootstrap_servers=['kafka:9092'],
+                api_version=(2, 6, 0),
                 value_serializer=lambda v: json.dumps(v).encode('utf-8')
             )
         except Exception as e:
@@ -40,7 +42,7 @@ def send_with_retry(producer, topic, event, max_retries=3):
             future.get(timeout=10)  # Wait for confirmation
             return True
         except Exception as e:
-            print(f"⚠️  Send failed (attempt {attempt + 1}/{max_retries}): {e}")
+            print(f"Send failed (attempt {attempt + 1}/{max_retries}): {e}")
             if attempt < max_retries - 1:
                 time.sleep(2 ** attempt)  # Exponential backoff: 1s, 2s, 4s
     print(f"Failed to send event after {max_retries} attempts")
@@ -78,5 +80,5 @@ try:
         time.sleep(0.5)  # 2 events per second
 
 except KeyboardInterrupt:
-    print("\n⏹️  Producer stopped")
+    print("\n Producer stopped")
     producer.close()

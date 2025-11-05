@@ -1,3 +1,5 @@
+# Infrastructure: Kafka, Zookeeper, Redis, PostgreSQL
+
 version: '3.8'
 
 services:
@@ -21,7 +23,7 @@ services:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
       # Listeners: how clients connect
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       # Auto-create topics when producer writes to them
@@ -45,6 +47,12 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+
+  # Event Producer - Simulates incoming events
+  producer:
+    build: ./producer
+    depends_on:
+      - kafka
 
 volumes:
   postgres_data:

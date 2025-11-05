@@ -1,3 +1,5 @@
+# Unit tests for filter matching
+
 import sys
 sys.path.append('..')  # So we can import from parent directory
 

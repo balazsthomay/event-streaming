@@ -1,3 +1,5 @@
+# WebSocket load testing
+
 from locust import User, task, between
 import websocket
 import json

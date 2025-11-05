@@ -38,6 +38,18 @@ curl -X POST http://localhost:8001/filters \
 python client.py
 ```
 
+### AWS Deployment
+```bash
+# Build multi-architecture image
+cd producer
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t /event-streaming-producer:latest --push .
+
+# Pull and run on EC2
+docker pull /event-streaming-producer:latest
+docker run /event-streaming-producer:latest
+```
+
 ## Key Design Decisions
 
 **Kafka + Redis split**: Kafka handles durability and replay. Redis handles fast per-user queues. Each tool does what it's best at.
@@ -46,7 +58,7 @@ python client.py
 
 **Lazy stream creation**: Redis streams created only when users connect. Saves memory but users miss events while disconnected.
 
-**No authentication**: Any subscriber_id works.
+**Containerization**: Docker for consistent deployments across environments. Supports both ARM64 (Mac) and AMD64 (AWS EC2).
 
 ## Known Limitations
 
@@ -55,14 +67,7 @@ python client.py
 - No rate limiting on APIs
 - Filter updates only apply to connected users
 - No monitoring dashboard
-
-## What's Implemented
-
-- Structured logging (INFO/DEBUG/ERROR levels)
-- Health checks on filter_service and Websocket
-- Retry logic in producer, server
-- Error handling for Redis and API failures
-- Unit tests for filter matching
+- probably single-threaded uvicorn. Would need multiple workers or load balancer to scale beyond ~10 connections.
 
 ## Observability
 
@@ -70,10 +75,17 @@ Prometheus metrics at `:8002/metrics` (Filter Service) and `:8003/metrics` (WebS
 - Events read/matched/routed, Redis failures, active streams
 - Active connections, events sent to clients
 
-**Metrics endpoints**:
+Check Prometheus metrics:
 ```bash
+# Filter Service metrics
 curl http://localhost:8002/metrics | grep -E "(active_streams_count|events_matched)"
+
+# WebSocket Server metrics
 curl http://localhost:8003/metrics | grep -E "(active_websocket|events_sent)"
+
+# Health checks
+curl http://localhost:8002/health
+curl http://localhost:8003/health
 ```
 
 ## Load Testing
@@ -83,13 +95,17 @@ Tested with Locust:
 - **50 concurrent connections**: 98% failure rate
 - didn't test inbetween
 
+Uses Locust for WebSocket load testing:
 ```bash
+# Create filters for 100 test users
 python create_test_filters.py
+
+# Run load test
 locust -f locustfile.py --headless --users 10 --spawn-rate 2 --run-time 30s
 ```
 
-**Bottleneck**: probably single-threaded uvicorn. Would need multiple workers or load balancer to scale beyond ~10 connections.
-
 ## Tech Stack
 
-Python, FastAPI, Kafka, Redis, PostgreSQL, WebSockets# event-streaming
+**Backend**: Python, FastAPI, Kafka, Redis, PostgreSQL, WebSockets  
+**Infra**: Docker, AWS ECR, AWS EC2  
+**Monitoring**: Prometheus metrics, structured logging

@@ -132,7 +132,7 @@ def kafka_consumer_loop():
                     logger.error(f"Error routing event to {subscriber_id}: {e}")
                     redis_write_failures.inc()
                 
-
+# matching logic
 def matches_criteria(event, criteria):
     if event['eventType'] not in criteria['event_types']:
         return False

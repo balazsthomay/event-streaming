@@ -1,4 +1,5 @@
-# client.py
+# simple WebSocket client example
+
 import asyncio
 import websockets
 import json
