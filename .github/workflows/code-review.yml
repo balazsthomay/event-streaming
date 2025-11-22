@@ -1,0 +1,23 @@
+name: AI Code Review
+   
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+   
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+       
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+         
+      - name: Run AI Code Review
+        uses: balazsthomay/code-review@main  # Your fork
+        with:
+          openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
+          min_severity: 5
